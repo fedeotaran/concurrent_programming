@@ -119,3 +119,111 @@ Las redes de filtros pueden usarse para resolver una variedad de problemas de pr
   }
 ```
 * *TODO:* PASAJE DE UN MONITOR CON VARIABLES CONDICIÓN A UN PROCESO SERVER EN PMA
+* *TODO:* SERVER DE SELF-SCHEDULING DE DISCO
+
+#### File servers: continuidad conversacional
+Como ejemplo final de la interacción cliente/servidor, presentamos una manera de implementar file servers, que son procesos que proveen acceso a archivos en almacenamiento secundario (por ej, archivos en disco). Para acceder a un archivo, un cliente primero abre el archivo.  Si la apertura es exitosa (el archivo existe y el cliente tiene permiso para acceder a él) entonces el cliente hace una serie de pedidos de read y write. Eventualmente el cliente cierra el archivo.
+```c
+  type kind= enum(READ, WRITE, CLOSE)
+  chan open(file_name: string, client_id: int)
+  chan access[1:n](kind: int, arg_types)
+  chan open_reply[1:m](int)
+  chan access_reply[1:m](result_types)
+
+  process file_server[i:1..n] {
+    var file_name: string, client_id: int
+    var k: kind, args: arg_types
+    var more:= false
+    var resuls
+    do true {
+      receive open(file_name, client_id)
+      < abre el archivo y si tiene exito >
+      send open_reply[client_id](i)
+      more:= true
+      do more {
+        receive access[i](k,args)
+        if k = READ { < procesa pedido de lectura > }
+        elseif k = WRITE { < procesa pedido de escritura > }
+        elseif k = CLOSE { < cierra archivo >; more:= false }
+      }
+    }
+  }
+
+process client[j:1..m] {
+  send open("file", j)
+  receive open_reply[j](server_id)
+  {{ usar el archivo }}
+  send access[server_id](args)
+  receive access_reply[j](results)
+  ...
+}
+```
+La interacción entre un cliente y un server es un ejemplo de continuidad conversacional.  En particular, un cliente comienza una “conversación” con un FS cuando ese server recibe el pedido de apertura. Luego el cliente sigue conversando con el mismo server. Esto se programa haciendo que el server primero reciba de open, luego repetidamente recibe de su elemento de access.
+Algorimos de heartbeat
+----------------------
+En un sistema jerárquico, los servers en niveles intermedios con frecuencia son también clientes de servers de más bajo nivel. Por ejemplo, el FS anterior podría procesar los pedidos de read y write comunicándose con un disk server como el que desarrollamos.
+Examinamos una clase distinta de interacción server en la cual los servers al mismo nivel son peers que cooperan para proveer un servicio. Este tipo de interacción se da en computaciones distribuidas en la cual no hay un solo server que tiene toda la información necesaria para servir un pedido del cliente.  consideramos el problema de computar la topología de una red. Este problema es representativo de una gran clase de problemas de intercambio de información distribuida que se da en redes. Se supone una red de procesadores conectados por canales bidireccionales.  Cada procesador se puede comunicar solo con sus vecinos y conoce solo los links con sus vecinos.
+Cada procesador es modelizado por un proceso, y los links de comunicación con canales compartidos. Resolvemos este problema asumiendo primero que todos los procesos tienen acceso a una memoria compartida, lo que no es realista para este problema. Luego refinamos la solución en una computación distribuida replicando variables globales y teniendo procesos vecinos interactuando para intercambiar su información local. En particular, cada proceso ejecuta una secuencia de iteraciones. En cada iteración, un proceso envía su conocimiento local de la topología a todos sus vecinos, luego recibe la información de ellos y la combina con la suya. La computación termina cuando todos los procesos aprendieron la topología de la red entera.
+Llamamos a este tipo de interacción entre procesos algoritmo heartbeat pues las acciones de cada nodo son como el latido de un corazón: primero se expande, enviando información; luego se contrae, incorporando nueva información. El mismo tipo de algoritmo puede usarse para resolver otros problemas, especialmente los de computaciones iterativas paralelas.
+### Topología de red: solución con variables compartidas
+```c
+  var top[1:n,1:n]: bool:= ([n*n] false)
+  process node[p:1..n] {
+    var links[1:n] : bool
+    # inicialmente links[q] es true si q es un vecino de Node[p]
+    fa q:= 1 to n st links[q] { top[p,q]:= true }
+    top[p,1:n] = links[1:n]
+  }
+```
+### Topología de red: solución distribuida
+```c
+  # CONOCIENDO EL DIAMETRO DE LA RED (distancia entre los nodos más lejanos)
+  chan topology[1:n]([1:n,1:n] bool)
+  process node[p:1..n]{
+    var links[1:n] : bool
+    # inicialmente links[q] true si q es vecino de Node[p]
+    var top[1:n,1:n]: bool:= ([n*n]false) # links conocidos
+    top[p,1..n] := links # llena la fila para los vecinos
+    var r:= 0
+    var newtop[1:n,1:n] : bool
+    do r < D { # D es el diámetro de la red
+      # envía el conocimiento local de la topología a sus vecinos
+      fa q:= 1 to n st links[q] { send topology[q](top) }
+      # recibe las topologías y hace or con su top
+      fa q:= 1 to n st links[q] {
+        receive topology[p](newtop)
+        top := top or newtop
+      }
+      r := r + 1
+    }
+  }
+```
+```c
+  # SIN CONOCER EL DIAMETRO. SE PARA CUANDO TODAS LAS FILAS DE LA MATRIZ TIENEN UN VALOR EN TRUE
+  chan topology[1:n](sender: int; done: bool; top: [1:n,1:n] bool)
+  process nodo[p:1..n] {
+    var links[1:n]: bool
+    var active[1:n]: bool:= links         # vecinos aún activos
+    var top[1:n,1:n]: bool:= ([n*n]false) # links conocidos
+    var r: int:= 0, done: bool:= false
+    var sender: int, qdone: bool, newtop[1:n,1:n]: bool
+    top[p,1..n] := links                  # llena la fila para los vecinos
+    do not done {
+      # envía conocimiento local de la topología a todos sus vecinos
+      fa q := 1 to n st links[q] { send topology[q](p, false, top) }
+      # recibe las topologías y hace "or" con su top
+      fa q := 1 to n st links[q] {
+        receive topology[p](sender, qdone, newtop)
+        top := top or newtop
+        if qdone { active[sender]:= false }
+      }
+      if all_row_true(top) { done:= true } # todas las filas de top tienen al menos 1 true
+      r:= r + 1
+    }
+    # última ronda
+    # envía topología a todos sus vecinos aún activos
+    fa q:= 1 to n st active[q] { send topology[q](p, done, top) }
+    # recibe un mensaje de cada uno para limpiar el canal
+    fa q:= 1 to n st active[q] { receive topology[p](sender, d, newtop) }
+  }
+```
