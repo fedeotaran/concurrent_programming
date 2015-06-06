@@ -431,4 +431,106 @@ Para computar la topología de una red que contiene ciclos, generalizamos el alg
   }
 ```
 Este algoritmo probe/echo para computar la topología de una red requiere menos mensajes que el algoritmo heartbeat. Para computaciones que diseminan o reúnen información en grafos, los algoritmos probe/echo son más eficientes que los heartbeat. En contraste, los algoritmos heartbeat son apropiados y necesarios para muchos algoritmos iterativos paralelos en los cuales los nodos repetidamente intercambian información hasta que convergen en una respuesta.
+Algoritmos de broadcast
+-----------------------
+En la sección previa, mostramos cómo hacer broadcast de información en una red. En particular, podemos usar un algoritmo probe para diseminar información y un algoritmo probe/echo para reunir o ubicar información.
+En la mayoría de las LAN, los procesadores comparten un canal de comunicación común tal como un Ethernet o token ring. En este caso, cada procesador está directamente conectado a cada uno de los otros. De hecho, tales redes con frecuencia soportan una primitiva especial llamada broadcast, la cual transmite un mensaje de un procesador a todos los otros. Esto provee una técnica de programación útil.
+Podemos usar broadcasts para diseminar o reunir información; por ejemplo, con frecuencia se usa para intercambiar información de estado del procesador en LAN. También podemos usarlo para resolver muchos problemas de sincronización distribuidos. Esta sección ilustra el poder de broadcasts desarrollando una implementación distribuida de semáforos. La base para los semáforos distribuidos (y otros protocolos de sincronización descentralizados) es un ordenamiento total de los eventos de comunicación. Comenzamos mostrando cómo implementar relojes lógicos y luego mostramos cómo usar esos relojes para ordenar eventos.
+### Relojes lógicos y ordenamiento de eventos
+Los procesos en un programa distribuido ejecutan acciones locales y acciones de comunicación. Las acciones locales incluyen cosas tales como leer y escribir variables locales. No tienen efecto directo sobre otros procesos. Las acciones de comunicación son enviar y recibir mensajes. Estos afectan la ejecución de otros procesos pues comunican información y son el mecanismo de sincronización básico. Las acciones de comunicación son así los eventos significantes en un programa distribuido. Por lo tanto, usamos el término evento para referirnos a la ejecución de send o receive.
+Hay un ordenamiento total entre eventos que se afectan uno a otro. Pero, hay solo un orden parcial entre la colección entera de eventos en un programa distribuido. Esto es porque las secuencias de eventos no relacionados (por ej, las comunicaciones entre distintos conjuntos de procesos) podría ocurrir antes, después, o concurrentemente con otros.  Un reloj lógico es un contador entero que es incrementado cuando ocurre un evento.  Asumimos que cada proceso tiene un reloj lógico y que cada mensaje contiene un timestamp. Los relojes lógicos son entonces incrementados de acuerdo a las siguientes reglas:
+Reglas de Actualización de Relojes Lógicos. Sea lc un reloj lógico en el proceso A.
+(1) Cuando A envía o broadcast un mensaje, setea el timestamp del mensaje al valor corriente
+de lc y luego incrementa lc en 1.
+(2) Cuando A recibe un mensaje con timestamp ts, setea lc al máximo de lc y ts+1 y luego
+incrementa lc en 1.
+### Semáforos distribuidos
+Recordemos la definición básica de semáforos: en todo momento, el número de operaciones P completadas es a lo sumo el número de operaciones V completadas más el valor inicial. Así, para implementar semáforos, necesitamos una manera de contar las operaciones P y V y una manera de demorar las operaciones P. Además, los procesos que “comparten” un semáforo necesitan cooperar para mantener el invariante aunque el estado del programa esté distribuido.  Podemos cumplir estos requerimientos haciendo que los procesos broadcast mensajes cuando quieren ejecutar operaciones P y V y que examinen los mensajes que reciben para determinar cuando continuar. En particular, cada proceso tiene una cola de mensajes local mq y un reloj lógico lc. Para simular la ejecución de P o V, un proceso broadcast un mensaje a todos los procesos usuario, incluyendo él mismo. El mensaje contiene la identidad del emisor, un tag (P o V) y un timestamp.
+Desafortunadamente, es irrealista asumir que broadcast es una operación atómica. Dos mensajes broadcast por dos procesos distintos podrían ser recibidos por otros en distinto orden. Más aún, un mensaje con un timestamp menor podría ser recibido después que un mensaje con un timestamp mayor. Sin embargo, distintos mensajes broadcast por un proceso serán recibidos por los otros procesos en el orden en que fueron enviados; estos mensajes tendrán también timestamps crecientes. Esto es porque (1) la ejecución de broadcast es la misma que la ejecución concurrente de send (que asumimos que provee entrega ordenada y confiable) y (2) un proceso incrementa su reloj lógico después de cada evento de comunicación.
+El hecho de que mensajes consecutivos enviados por cada proceso tienen timestamps distintos nos da una manera de tomar decisiones de sincronización. Supongamos que una cola mq de mensajes de un proceso contiene un mensaje m con timestamp ts. Entonces, una vez que el proceso ha recibido un mensaje con un timestamp más grande de cada uno de los otros procesos, se asegura que nunca verá un mensaje con un timestamp menor. En este punto, el mensaje m se dice que está totalmente reconocido (fully acknowledged). Más aún, una vez que m está totalmente reconocido, entonces cualquier otro mensaje anterior a éste en mq también estará totalmente reconocido pues todos tendrán timestamps menores. Así, la parte de mq que contiene mensajes totalmente reconocidos es un prefijo estable: ningún mensaje nuevo será insertado en él.
+Para completar la implementación de semáforos distribuidos, cada proceso simula las operaciones semáforo. Usa una variable local sem para representar el valor del semáforo. Cuando un proceso toma un mensaje ACK, actualiza el prefijo estable de su cola mq. Para cada mensaje V, el proceso incrementa sem y borra el mensaje V. Luego examina los mensajes P en orden de timestamp. Si sem > 0, el proceso decrementa sem y borra el mensaje P.
+```c
+  type kind= enum(V, P, ACK)
+  chan sem_op[1:n](int sender, kind, int timestamp)
+  chan go[1:n](int timestamp)
+
+  process user[i:1..n] {
+    int lc, ts
+    lc= 0
+    # ejecuta una operación V
+    broadcast sem_op(i, V, lc)
+    lc= lc + 1
+    ...
+    # ejecuta la operación P
+    broadcast sem_op(i, P, lc)
+    lc= lc + 1
+    receive go[i](ts)
+    lc= max(lc, ts+1)
+    lc= lc + 1
+    ...
+  }
+
+  process helper[i:1..n] {
+    mq queue of (int, kind, int)
+    int lc= 0
+    int sem= [[ valor inicial ]]
+    int sender, ts
+    kind k
+    do true {
+      receive sem_op[i](sender, k, ts)
+      lc= max(lc, ts+1)
+      lc= lc + 1
+      if k == P or k == V {
+        mq.insert(sender, k, ts)
+        broadcast sem_op(i, ACK, lc)
+        lc= lc + 1
+      } elseif k == ACK {
+        [[ registrar que otro ACK fue visto ]]
+        fa fully acknowledged V messages { mq.remove(sender, k, ts) }
+        fa fully acknowledged P messages st sem > 0 {
+          mq.remove(sender, k, ts)
+          sem= sem + 1
+          if sender == i { send go[i](lc); lc= lc + 1 }
+        }
+      }
+    }
+  }
+```
+Podemos usar semáforos distribuidos para sincronizar procesos en un programa distribuido esencialmente de la misma manera que usamos semáforos regulares en programas de variables compartidas.
+Cuando se usan algoritmos broadcast para tomar decisiones de sincronización, cada proceso debe participar en cada decisión. En particular, un proceso debe oir de cada uno de los otros para determinar cuándo un mensaje está totalmente reconocido. Esto significa que estos algoritmos no son buenos para interacciones entre un gran número de procesos. También que deben ser modificados para contemplar fallas.
+Algoritmos token-passing
+------------------------
+Un token es una clase especial de mensaje que puede ser usado o para dar permiso para tomar una acción o para reunir información de estado global. Ilustramos token-passing presentando soluciones a dos problemas adicionales de sincronización. Primero presentamos una solución distribuida simple al problema de la SC. Luego desarrollamos dos algoritmos para detectar cuándo una computación distribuida ha terminado. Token-passing también es la base para otros algoritmos; por ej, para sincronizar el acceso a archivos replicados.
+### Exclusión Mutua Distribuida
+Aunque el problema de la SC reside primariamente en programas de variables compartidas, también se da en programas distribuidos cuando hay un recurso compartido que puede usar a lo sumo un proceso a la vez. Más aún, el problema de la SC con frecuencia es una componente de un problema mayor, tal como asegurar consistencia en un archivo distribuido o un sistema de BD.
+Aquí resolvemos el problema de una tercera manera usando un token ring. La solución es descentralizada y fair, como una que usa semáforos distribuidos, pero requiere intercambiar pocos mensajes. Además, la aproximación básica puede ser generalizada para resolver otros problemas de sincronización que no son fácilmente resueltos de otras maneras.
+Sea P[1:n] una colección de procesos “regulares” que contienen SC y SNC. Necesitamos desarrollar entry y exit protocols que esos procesos ejecuten antes y después de su SC. También los protocolos deberían asegurar exclusión mutua, evitar deadlock y demora innecesaria, y asegurar entrada eventual (fairness).
+Dado que los procesos regulares tienen otro trabajo que hacer, no queremos que también tengan que circular el token. Así emplearemos una colección de procesos adicionales, Helper[1:n], uno por proceso regular. Estos procesos helper forman un anillo.
+Cuando Helper[i] recibe el token, chequea para ver si su cliente P[i] quiere entrar a su SC. Si no, Helper[i] pasa el token. En otro caso, Helper[i] le dice a P[i] que puede entrar a su SC, luego espera hasta que P[i] salga; luego, pasa el token.
+```c
+  chan token[1:n]()
+  chan enter[1:n]()
+  chan go[1:n]()
+  chan exit[1:n]()
+
+  process helper[1:1..n] {
+    receive token[i]()
+    if not empty(enter[i]) {
+      receive enter[i]()
+      send go[i]()
+      receive exit[i]()
+    }
+    send token[(i mod n) + 1]() # pasa el token
+  }
+
+  process p[i:1..n] {
+    send enter[i]()
+    receive go[i]()
+    SC
+    send exit[i]()
+    SNC
+  }
+```
+Esta solución es fair, pues el token circula continuamente, y cuando un Helper lo tiene, P[i] tiene permiso para entrar si quiere hacerlo. Como está programado, el token se mueve continuamente entre los helpers. Esto es lo que sucede en una red física token-ring. Sin embargo, en un token-ring software, probablemente es mejor agregar algún delay en cada helper para que el token se mueva más lentamente en el anillo.
+## Detección de Terminación en un Anillo
 
