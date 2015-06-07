@@ -60,7 +60,7 @@ Para la generación de números primos utilizaremos la técnica de la criba de E
 ```
 El primer proceso, Sieve[1], envía todos los números impares desde 3 a n a Sieve[2].  Cada uno de los otros procesos recibe un stream de números de su predecesor. El primer número p que recibe el proceso Sieve[i] es el i-ésimo primo. Cada Sieve[i] subsecuentemente pasa todos los otros números que recibe que no son múltiplos de su primo p. El número total L de procesos Sieve debe ser lo suficientemente grande para garantizar que todos los primos hasta n son generados.
 El programa anterior termina en deadlock. Podemos fácilmente modificarlo para que termine normalmente usando centinelas, como en la red de filtros merge.
-### Multiplicación matriz/vercor 
+### Multiplicación matriz/vector
 Consideremos el problema de multiplicar una matriz a por un vector b. Por simplicidad, asumiremos que a tiene n filas y n columnas, y por lo tanto que b tiene n elementos. Nuestra tarea es computar el producto matriz/vector.
 Esto requiere computar n productos internos, uno por cada fila de a con el vector b.
 Como solución distribuida podemos implementar un proceso por posición de la matriz.
@@ -147,4 +147,41 @@ Para el ejemplo de este algoritmo asumimos que tanto k como n son el mismo núme
   }
 ```
 Para algoritmos con n > k cada proceso tieme más de un valor y por lo tanto deberá intercambiar los valores siguiendo la misma lógica que el algoritmo *compare and exchange*
-
+### Computación paralela de prefijos
+Para implementar este algoritmo paralelo de prefijos usando MP, necesitamos n procesos.  Inicialmente, cada uno tiene un valor de a. En cada paso, un proceso envía su suma parcial al proceso a distancia d a su derecha (si hay alguno), luego espera recibir una suma parcial del proceso a distancia d a su izquierda (si lo hay). Los procesos que reciben sumas parciales las suman a sum[i].  Luego cada proceso dobla la distancia d. El algoritmo completo es el siguiente (el loop invariant SUM especifica cuánto del prefijo de a sumo cada proceso en cada iteración)
+```c
+  process sum[i:1..n] {
+    int d= 1, sum= a[i], new
+    do d < n {
+      if i+d <= n { p[i+d]! sum }
+      if i-d >= 1 { p[i-d]? new; sum= sum + new }
+      d= 2 * d
+    }
+  }
+```
+Fácilmente podemos modificar este algoritmo para usar cualquier operador binario asociativo. Todo lo que necesitamos cambiar es el operador en la sentencia que modifica sum.  También podemos adaptar el algoritmo para usar menos de n procesos. En este caso, cada proceso tendría un slice del arreglo y necesitaría primero computar las sumas prefijas de ese slice antes de comunicarlas a los otros procesos.
+### Multiplicación de matrices: Algoritmo Broadcast
+El siguiente programa contiene una implementación distribuida de multiplicación de matrices. Usa el método de comunicación guardada de broadcasting de mensajes. En particular, cada proceso primero envía su elemento de a a otros procesos en la misma fila y recibe sus elementos de a. Cada proceso luego hace broadcast de su elemento de b a todos los procesos en la misma columna y a su turno recibe sus elementos de b. (Estas dos sentencias de comunicación guardada podrían ser combinadas en una con 4 guardas). Cada proceso luego computa un producto interno. Cuando el proceso termina, la variable cij en el proceso P[i,j] contiene el valor resultado c[i,j].
+```c
+  process p[i:1..n, 1..n] {
+    real aij, bij, cij
+    real row[1:n], col[1:n]
+    int k
+    bool sent[1:n], received[1:n] # Inicializacion en false
+    row[j]= aij, col[i]= bij
+    # broadcast aij y adquiere otros valores de a[i,*]
+    sent[j]= true received[i]0 true
+    do (k: 1..n) not sent[k]; p[i,k]! aij → sent[k]= true
+       (k: 1..n) not received[k]; p[i,k]? row[k] → received[k]= true
+    od
+    # broadcast bij y adquiere otros valores de b[*,j]
+    sent= ([n] false); received= ([n] false)
+    sent[i]= true; received[i]= true
+    do (k: 1..n) not sent[k]; p[k,j]! bij → sent[k]= true
+       (k: 1..n) not received[k]; p[k,j]? col[k] → received[k]= true
+    od
+    # computa el producto interno de a[i,*] y b[*,j]
+    cij= 0
+    fa k= 1 to n { cij= cij + row[k] * col[k] }
+  }
+```
