@@ -4,18 +4,20 @@ Buffer limitado
 ---------------
 ```c
   monitor bounded_buffer {
-    var buf[1..n]: T
-    var front:= 1, rear:= 0, count:= 0
-    var not_full: cond
-    var not_empty: cond
-    procedure deposit(data: T) {
-      do count = n { wait(not_full) }
-      buf[rear]:= data; rear:= (rear mod n) + 1; count:= count + 1
+    T buf[1..n]
+    int front= 1, rear= 0, count= 0
+    cond not_full
+    cond not_empty
+
+    procedure deposit(T data) {
+      do count == n { wait(not_full) }
+      buf[rear]= data; rear= (rear mod n) + 1; count= count + 1
       signal(not_empty)
     }
-    procedure fetch(var result: T) {
-      do count = 0 { wait(not_empty) }
-      result:= buf[front]; front:= (front mod n) + 1; count:= count - 1
+
+    procedure fetch(T result) {
+      do count == 0 { wait(not_empty) }
+      result= buf[front]; front= (front mod n) + 1; count= count - 1
       signal(not_full)
     }
   }
@@ -24,17 +26,20 @@ Shortest job next
 -----------------
 ```c
   monitor shortest_job_next {
-    var free:= true
-    var turn: cond
+    bool free= true
+    cond turn
+
     procedure request(time: int) {
-      if free { free:= false
+      if free {
+        free= false
       } else {
         wait(turn, time)
       }
     }
+
     procedure release() {
       if empty(turn) {
-        free:= true
+        free= true
       } else {
         signal(turn)
       }
@@ -45,13 +50,16 @@ Implementación de semáforos
 ---------------------------
 ```c
   monitor semaphore {
-    var s:= 0, pos: cond
+    int s= 0
+    cond pos
+
     procedure P() {
-      do s = 0 { wait(pos) }
-      s:= s - 1
+      do s == 0 { wait(pos) }
+      s= s - 1
     }
+
     procedure V() {
-      s:= s + 1
+      s= s + 1
       signal(pos)
     }
   }
@@ -60,11 +68,12 @@ Semaforos (Passing the condition)
 ---------------------------------
 ```c
   monitor semaphore {
-    var s:= 0, pos: cond
+    int s= 0
+    cond pos
 
     procedure P() {
       if s > 0 {
-        s:= s -1
+        s= s -1
       } else {
         wait(pos)
       }
@@ -72,7 +81,7 @@ Semaforos (Passing the condition)
 
     procedure V() {
       if empty(pos) {
-        s:= s + 1
+        s= s + 1
       } else {
         signal(pos)
       }

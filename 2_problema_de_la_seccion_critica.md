@@ -3,16 +3,18 @@ Problema de la sección crítica
 Spinlocks
 ---------
 ```c
-  bool: lock;
+  bool lock
   process sc[i:1..n] {
-    while (ts(lock)) { skip; }
-    # Uso de la sección crítica
-    lock:= false;
+    while true {
+      while (ts(lock)) { skip; }
+      # Uso de la sección crítica
+      lock= false;
+    }
   }
 
-  function ts(bool: lock) {
-    < bool: inicial := lock;
-    lock:= true
+  function ts(bool lock) {
+    < bool inicial= lock;
+    lock= true
     return inicial >
   }
 ```

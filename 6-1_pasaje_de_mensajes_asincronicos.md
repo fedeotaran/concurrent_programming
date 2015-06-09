@@ -34,7 +34,7 @@ Se proveen un número de técnicas útiles para diseñar programas distribuidos.
 ```
 ### Filtros: una red de ordenación
 ```c
-  # Proceso short
+  # Proceso sort
   process sort {
     < Recibe todos los números de un canal de entrada >
     < Ordena los números >
