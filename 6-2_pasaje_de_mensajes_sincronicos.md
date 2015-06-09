@@ -185,3 +185,120 @@ El siguiente programa contiene una implementación distribuida de multiplicació
     fa k= 1 to n { cij= cij + row[k] * col[k] }
   }
 ```
+### Multiplicación de matrices: Algoritmo heartbeat
+* TODO 
+Clientes y servidores
+---------------------
+### Alocacíon de recursos
+Tal alocador de recursos sirve dos clases de pedidos: adquirir y liberar.
+```c
+  process allocator {
+    int avail= MAX_UNITS
+    set of int units
+    int unit_id
+    do (c: 1..n) avail > 0; client[c]?acquire() →
+         avail= avail - 1; units.remove(units_id)
+         client[c]!reply(unit_id)
+       (c: 1..n) client[c]?release(unitid) →
+         avail= avail + 1; units.insert(unit_id)
+    od
+  }
+
+  process client[i: 1..n] {
+    int unit_id
+    allocator!acquire()
+    allocator?reply(unit_id)
+    [[ usa el recurso unit_id y luego lo libera ]]
+    allocator!release(unit_id)
+    ....
+  }
+```
+### File server y continuidad conversacional
+El siguiente programa muestra cómo los FS y clientes pueden interactuar usando SMP y comunicación guardada. Un pedido de open desde un cliente es enviado a cualquier FS; uno que está libre recibe el mensaje y responde. Tanto el cliente como el FS usan el índice del otro para el resto de la conversación.
+```c
+  process file_server[i:1..n] {
+    string file_name
+    args_type args
+    bool more
+    do (c: 1..m) Client[c]?open(fname) →
+      # abre archivo fname; si tiene éxito entonces:
+      client[c]!open_reply(); more= true
+      do more {
+        if client[c]?read(args) →
+            manejar lectura; client[c]!read_reply(results)
+          client[c]?write(args) →
+            manejar escritura; client[c]!write_reply(results)
+          client[c]?close(  ) →
+            cierra el archivo; more= false
+        fi
+      }
+    od
+  }
+
+  process client[j:1..m] {
+    int server_id
+    do (i: 1..n) file_server[i]!open("pepe") →
+      serverid= i; file_server[i]?open_reply()
+    od
+    # usa y eventualmente cierra el archivo; por ej, para leer ejecuta:
+    file_server[server_id]!read(argumentos de acceso)
+    file_server[server_id]?read_reply(results)
+    .....
+  }
+```
+### Filosofos centralizado
+```c
+process waiter {
+  bool eating[1:5]= ([5] false)
+  do (i: 1..5) not (eating[iΘ1] or eating[i⊕1]);
+       phil[i]?getforks() →  eating[i]= true
+     (i: 1..5) phil[i]?relforks() →  eating[i]= false
+  od
+}
+process phil[i: 1..5] {
+  do true {
+    waiter!getforks()
+    [[ come ]]
+    waiter!relforks()
+    [[ piensa ]]
+  }
+}
+```
+### Filósofos (Descentralizado)
+El proceso Waiter anterior maneja los cinco tenedores. En esta sección desarrollamos una solución descentralizada en la cual hay 5 waiters, uno por filósofo. La solución es otro ejemplo de algoritmo token-passing.
+```c
+  process waiter[i:1..5] {
+    bool eating= false, hungry= false # estado de phil[i]
+    bool haveL, haveR
+    bool dirtyL= false, dirtyR= false
+    if i = 1 →  haveL= true; haveR= true
+      i ≥ 2 and i ≤ 4 →  haveL= false; haveR= true
+      i = 5 →  haveL= false; haveR= false
+    fi
+    do phil[i]?hungry() →
+        hungry[i]= true # phil[i] quiere comer
+      hungry and haveL and haveR →
+        hungry= false; eating= true # phil[i] puede comer
+        dirtyL= true; dirtyR= true; phil[i]!eat()
+      hungry and not haveL; waiter[iΘ1]!need() →
+        haveL= true # pidió el tenedor izquierdo; ahora lo tiene
+      hungry and not haveR; waiter[i⊕1]!need() →
+        haveR= true # pidió el tenedor derecho; ahora lo tiene
+      haveL and not eating and dirtyL; waiter[iΘ1]?need() →
+        haveL= false; dirtyL= false # cede el tenedor izquierdo
+      haveR and not eating and dirtyR; waiter[i⊕1]?need() →
+        haveR= false; dirtyR= false # cede el tenedor derecho
+      phil[i]?full() →
+        eating= false # phil[i] terminó de comer
+    od
+  }
+
+  process phil[i:1..5] {
+    do true {
+      waiter[i]!hungry(); waiter[i]?eat()
+      [[ come ]]
+      waiter[i]!full()
+      [[ piensa ]]
+    }
+  }
+```
