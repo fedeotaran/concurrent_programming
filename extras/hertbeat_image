@@ -1,0 +1,23 @@
+
+process nodo[i:1..n, j:1..n] {
+  # inicialmente los valores para mayor y menor
+  int value, new, min, max
+  value= [[obtengo mi valor]]
+  new= 0
+  min= value
+  max= value
+  while r < n^2 {
+    # envía el conocimiento local a sus vecinos
+    if i < n { send value[i+1,j](value) }
+    if i > 1 { send value[i-1,j](value) }
+    if j < n { send value[i,j+1](value) }
+    if j > 1 { send value[i,j-1](value) }
+    # recibo los valores de mis vecinos
+    while not empty(value[i,j]) {
+      receive value[i,j](new);
+      if new < min { min= new }
+      if new > max { max= new }
+    }
+    r= r + 1
+  }
+}
